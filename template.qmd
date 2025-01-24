@@ -12,13 +12,33 @@ library(here)
 
 t_df<-read_csv(here("data", "titanic_survival.csv"))
 ```
-
+1. What's your research Q
+2. Gather data
+3. Develop a hypothesis
+4. Define methodology
+5. Look at data / EDA
+6. Clean data / determine which variables to keep
 
 ## ML Framework
 
 Write a description of how you go about applying machine learning problems. If you drew a diagram, share with a neighbor and discuss.
 
+1. Define metrics for success
+2. Data split / partitioning
+3. Build Models
+  a. Create model options by defining what variables you want to include
+  b. Data preprocessing
+  c. train model
+  d. tune our model
+  e. evaluate perf
+  f. model selection
 
+4. Finalize the model (aka train it on all the data)
+5. Interpret results/visualize/communicate
+
+.Get to C-fold validation
+
+Using a specified portion of a known data set to train a model's predictive ability, then testing and assessing that model's predictive accuracy
 
 
 ## Tidymodels Overview
@@ -41,7 +61,49 @@ In real life, we would have to go out and collect the data. Today, we will use t
 
 Take 15 minutes to explore the data. Are there any immediate changes to the data that we need to change? What relationships can you see through graphs? What variables could be of interest to predict survival of passengers on the Titanic?
 
+need to understand some of these variables, drop NAs for age, turn sex into a vector, normalize class
 
+```{r}
+summary(t_df)
+
+t_clean <- t_df |> select(survived,pclass,sex,age,sib_sp,parch,fare,cabin) |> drop_na()
+
+summary(t_clean)
+
+age_survival <- ggplot(data=t_clean) + geom_line(aes(x=age,y=survived)) + theme_bw()
+
+
+```
+```{r}
+surv_df <- t_df %>%
+  mutate(survived = factor(survived),   ### categorical outcome variables need to be factors
+         pclass   = factor(pclass)) %>% ### turn some predictors to factor
+  select(-cabin, -ticket)  ### lots of NAs here - and not likely to be very helpful
+
+```
+
+
+```{r}
+surv_df$gender_numeric <- ifelse(surv_df$sex == "male", 1, 0)
+```
+
+Here are some quick examples that I did.
+
+
+```{r}
+ggplot(surv_df, aes(x = pclass, fill = survived)) +
+  geom_bar()
+
+ggplot(surv_df,aes(x=gender_numeric,fill=survived))+geom_bar()
+```
+
+
+
+```{r}
+ggplot(surv_df, aes(x = age, fill = survived)) +
+  geom_histogram()
+
+```
 
 ## Data Split
 
@@ -107,16 +169,17 @@ We're going to build two models: a logistic regression and a lasso logistic regr
 
 ```{r}
 glm_rec<-recipe(survived ~ sex + pclass, data = surv_train_df)
+# Could add age, fare
 
 # steps we need to do to prepare data for lasso
 
 lasso_rec<-recipe(survived~.,data=surv_train_df) %>%
-  update_role(passenger_id, new_role = "ID") %>%
-  step_rm(name,age) %>%
-  step_unknown(all_nominal(),-all_outcomes()) |> 
+  update_role(passenger_id, new_role = "ID") %>% #it's just a tag, it's role is just a marker
+  step_rm(name,age) %>% #don't want to consider name and age since there's so much missing data
+  step_unknown(all_nominal(),-all_outcomes()) |> #if you see an NA, make a new factor class called unknown
   step_dummy(all_nominal(),-all_outcomes()) |>
-  step_zv(all_numeric(),-all_outcomes()) |> 
-  step_normalize(all_numeric(),-all_outcomes())
+  step_zv(all_numeric(),-all_outcomes()) |> #if factors have no variance, get ridd of them, only mandatory elements
+  step_normalize(all_numeric(),-all_outcomes()) #all numeric data should be normalized, only mandatory elements
 
 ```
 
@@ -148,7 +211,18 @@ Now fill in the following code chunk to fit the lasso model. Create a table (or 
 
 
 ```{r}
+lasso_wf <-workflow()|>
+  add_recipe(lasso_rec)|>
+  add_model(lasso_md)
 
+lasso_fit<-lasso_wf|>
+  fit(surv_train_df)
+
+lasso_test <-surv_test_df|>
+  mutate(predict(lasso_fit,new_data=surv_test_df))|>
+  mutate(predict(lasso_fit,new_data=surv_test_df,type='prob'))
+
+table(lasso_test$survived, lasso_test$.pred_class)
 
 ```
 
@@ -168,7 +242,11 @@ lasso_test |>
 Calculate the `ROC AUC` for each model. Use the `roc_auc` function from yardstick.
 
 ```{r}
+log_test |> 
+  yardstick::roc_auc(truth=survived,.pred_0) #capturing the fact that the values are different. accuracy only looks at whether or not it got the right answer, not the precision
 
+lasso_test|>
+  yardstick::roc_auc(truth=survived,.pred_0)
 ```
 
 
@@ -181,9 +259,9 @@ One run of the model is not enough to determine which model is better. We need t
 ```{r}
 set.seed(12)
 
-folds<-vfold_cv(surv_train_df, v=10, strata = survived)
+folds<-vfold_cv(surv_train_df, v=10, strata = survived) #says how many times you want to fold data and cross-validate
 
-log_fit_folds<- log_fit |> 
+log_fit_folds<- log_wf |> 
   fit_resamples(folds)
 
 collect_metrics(log_fit_folds)
@@ -199,11 +277,11 @@ Which model do we choose?
 Let's look at the actual models to get a better understanding.
 
 ```{r}
-log_fit |> 
+coef<-log_fit |> 
   extract_fit_parsnip()|> 
   tidy()
 
-lasso_fit |>
+lasso_fit |> #rather than me telling it to look for a specific coefficient, it takes all possible coefficients and determines which do I need and which do I not need
   extract_fit_parsnip() |> 
   tidy()
 ```
@@ -216,6 +294,8 @@ We will finalize the model by fitting the model to the entire dataset.
 ```{r}
 final_log<-log_wf |>
   last_fit(surv_split)
+
+useable_log<-final_log|>extract_fit_parsnip()
 ```
 
 
@@ -229,7 +309,7 @@ final_log |>
   extract_fit_parsnip() |>
   tidy() |> 
   mutate(odds=exp(estimate),
-         prob=odds/(1+estimate))
+         prob=odds/(1+odds))
 ```
 
 Please give this a go on your own with the post-lab exercise. I will be walking around to assist.
