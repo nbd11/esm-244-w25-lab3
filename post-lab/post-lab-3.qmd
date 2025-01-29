@@ -21,7 +21,30 @@ Examine the data to come up with an interesting research question based on the w
 
 Create some exploratory tables or charts to help you better understand possible relationships
 
+find min and max of the score, then set that to 0 or 1
+```{r}
+min(wine_quality$quality)
+max(wine_quality$quality)
+  
+```
+
+
 ## Use a Tidymodel framework to conduct your analysis.
+
+```{r}
+wine_df %>%
+  group_by(quality) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  mutate(prop = n / sum(n))
+```
+
+
+```{r}
+wine_df <- wine_quality %>%
+  mutate(survived = factor(quality))|>   ### categorical outcome variables need to be factors
+```
+
 
 ## Visualize
 
